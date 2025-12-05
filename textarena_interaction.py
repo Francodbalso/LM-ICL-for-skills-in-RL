@@ -3,6 +3,12 @@ from agent import AgentLLM
 import re
 import ollama
 import json
+from enum import Enum
+
+class Models(Enum):
+    PHI = "phi3:3.8b"
+    QWEN = "qwen3:4b"
+    GEMMA = "gemma3:4b"
 
 class ContextAgentLLM:
     def __init__(self, model_name, context_size, temperature, max_tokens):
@@ -19,48 +25,75 @@ class ContextAgentLLM:
                         prompt=prompt,
                         options=self.options,
                         context = context)
-
-def extract_isolated_pair(text):
-    # Define the pattern:
-    # (?<![A-Z])  -> Lookbehind: Ensure the char before isn't an uppercase letter
-    # ([A-Z])     -> Capture Group 1: The first letter
-    # \s+         -> One or more spaces
-    # ([A-Z])     -> Capture Group 2: The second letter
-    # (?![A-Z])   -> Lookahead: Ensure the char after isn't an uppercase letter
-    pattern = r'(?<![A-Z])([A-Z])\s+([A-Z])(?![A-Z])'
     
-    matches = re.findall(pattern, text)
+class TestEnv():
+    def __init__(self, env_id, agent, cache_file="experience_cache.json"):
+        self.env_id = env_id
+        self.agent = agent
+        self.cache_file = cache_file
+        self.cache_path = "./cache/"
+        self.get_experience_cache()
 
-    # We expect exactly ONE valid pair in the string
-    if len(matches) == 1:
-        # matches[0] will be a tuple like ('A', 'B')
-        return matches[0]
-    else:
-        return -1, -1
+    def get_experience_cache(self):
+        file_path = self.cache_path+self.cache_file
+        with open(file_path, 'r') as fp:
+            self.experience_cache = json.load(fp)
+
+    def save_experience_cache(self):
+        file_path = self.cache_path+self.cache_file
+        with open(file_path, 'w') as fp:
+            json.dump(self.experience_cache, fp, indent=2)
     
-def format_action(text, env_id):
-    if "TowerOfHanoi-v0" in env_id:
-        A, B = extract_isolated_pair(text)
+    def add_to_experience_cache(self, addition):
+        self.experience_cache.append(addition)
+
+    def run_round(self, round_id): # must pass back (save to experience boolean, experience)
+        pass
+
+    def run(self, rounds=5, update_cache=True, **kwargs):
+        for episode in range(rounds):
+            (save, experience) = self.run_round(episode+1, **kwargs)
+            if (save): self.add_to_experience_cache(experience)
+        
+        if (update_cache): self.save_experience_cache()
+
+class TowerOfHanoiTestEnv(TestEnv):
+    
+    def __init__(self, agent, num_disks=4, max_turns=25, cache_file="experience_cache.json"):
+        self.env_id = "TowerOfHanoi-v0"
+        self.num_disks = num_disks
+        self.max_turns = max_turns
+        super().__init__(self.env_id, agent, cache_file)
+
+    def extract_isolated_pair(self, text):
+        # Define the pattern:
+        # (?<![A-Z])  -> Lookbehind: Ensure the char before isn't an uppercase letter
+        # ([A-Z])     -> Capture Group 1: The first letter
+        # \s+         -> One or more spaces
+        # ([A-Z])     -> Capture Group 2: The second letter
+        # (?![A-Z])   -> Lookahead: Ensure the char after isn't an uppercase letter
+        pattern = r'(?<![A-Z])([A-Z])\s+([A-Z])(?![A-Z])'
+        
+        matches = re.findall(pattern, text)
+
+        # We expect exactly ONE valid pair in the string
+        if len(matches) == 1:
+            # matches[0] will be a tuple like ('A', 'B')
+            return matches[0]
+        else:
+            return -1, -1
+    
+    def format_action(self, text):
+        A, B = self.extract_isolated_pair(text)
         return f"[{A} {B}]"
-    else:
-        return "UNKOWN ENV"
-
-if __name__ == "__main__":
-    env_id = "TowerOfHanoi-v0"
-    cache_path = "hanoi_experience_cache.json"
-    with open(cache_path, 'r') as fp:
-        experience_cache = json.load(fp)
-    #agent = ContextAgentLLM(model_name='hoangquan456/qwen3-nothink:8b', context_size=40000, temperature=0.5, max_tokens=1000)
-    agent = ContextAgentLLM(model_name='qwen3:4b', context_size=40000, temperature=0.5, max_tokens=8000)
-
-    for episode in range(0, 3):
-        # Create fresh environment for each episode
-        env = ta.make(env_id=env_id, num_disks=4, max_turns=25)
+    
+    def run_round(self, round_id): 
+        env = ta.make(env_id=self.env_id, num_disks=self.num_disks, max_turns=self.max_turns)
         env.reset(num_players=1)
 
         done = False
         counter = 0
-        print(f"\n++++++++++++++++++NEW GAME {episode+1}+++++++++++++++++++\n")
+        print(f"\n++++++++++++++++++NEW GAME {round_id}+++++++++++++++++++\n")
 
         # Track the full episode trajectory for storing in cache (gameplay only, no rules)
         full_episode_text = ""
@@ -77,7 +110,7 @@ if __name__ == "__main__":
 
         # Prepare buffer text with past experiences (only for first turn)
         #selected_runs = []
-        selected_runs = [run for run in experience_cache]
+        selected_runs = [run for run in self.experience_cache]
         if len(selected_runs) > 3:
             selected_runs = selected_runs[-3:]
         if len(selected_runs) != 0:
@@ -87,7 +120,6 @@ if __name__ == "__main__":
         else:
             buffer_text = ""
 
-        buffer_len = len(buffer_text)
         print(f"Using {len(selected_runs)} past runs in buffer")
 
         while not done:
@@ -123,7 +155,7 @@ if __name__ == "__main__":
             print("NEW OBSERVATION END")
 
             # Get action from agent
-            action_response = agent.get_action(observation_to_send, current_context)
+            action_response = self.agent.get_action(observation_to_send, current_context)
             current_context = action_response['context']
 
             print("RESPONSE START")
@@ -131,7 +163,7 @@ if __name__ == "__main__":
             print("RESPONSE END")
 
             # Format action for environment
-            action = format_action(action_response['response'], env_id)
+            action = self.format_action(action_response['response'])
             print(f"Formatted action: {action}")
 
             # Take step in environment
@@ -151,20 +183,20 @@ if __name__ == "__main__":
             print("Final observation length:", len(final_observation))
             print("Gameplay-only length:", len(full_episode_text))
         # Store episode trajectory (gameplay only, no rules)
-        
-        
 
         # Close environment
         rewards, game_info = env.close()
-        print(f"Episode {episode+1} rewards: {rewards}")
+        print(f"Episode {round_id+1} rewards: {rewards}")
         print(f"Game info: {game_info}")
         # if rewards[0] == 0.0:
         #     full_episode_text = full_episode_text + "\n[GAME] You attempted an invalid move. Reason: You tried to place a larger disk on a smaller disk. Please resubmit a valid move and remember to follow the game rules to avoid penalties."
         # if rewards[0] == 1.0:
         #     full_episode_text = full_episode_text + "\nYOU WIN, Good job the above attempt was succesful."
         full_episode_text = full_episode_text + "\n" + game_info[0]["reason"]
-        experience_cache.append(full_episode_text)
+        return (True, full_episode_text)
 
-    # Save updated cache
-    with open(cache_path, 'w') as fp:
-        json.dump(experience_cache, fp, indent=2)
+if __name__ == "__main__":
+    #agent = ContextAgentLLM(model_name='hoangquan456/qwen3-nothink:8b', context_size=40000, temperature=0.5, max_tokens=1000)
+    agent = ContextAgentLLM(model_name=Models.QWEN, context_size=40000, temperature=0.5, max_tokens=8000)
+    env = TowerOfHanoiTestEnv(agent, cache_file="hanoi_experience_cache.json")
+    env.run()
