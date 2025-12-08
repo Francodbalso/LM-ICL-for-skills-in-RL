@@ -1,3 +1,4 @@
+'''use this script to run a model with an already saved buffer and compute any statistics'''
 import warnings
 warnings.filterwarnings("ignore") 
 from agent import ContextAgentLLM
@@ -15,23 +16,23 @@ def format_action(response, possible_actions):
     return -1
 
 if __name__ == "__main__":
-    clear_buffer_at_start = True
-    cache_path = "caches/baby_ai_experience.json"
-    if clear_buffer_at_start:
-        with open(cache_path, 'w') as fp:
-            json.dump([], fp, indent=2)
+    use_buffer = False
+    # possible task choices are: ['goto', 'pickup', 'open', 'putnext', 'pick up seq go to']
+    env_params = {'forced_level':'goto', 'room_size':4, 'num_dists':0}
+    max_steps = 8
+    n_eps = 10
+    seeds = list(range(0, 0+n_eps))
+    #seeds = [16]
 
-    with open(cache_path, 'r') as fp:
-        experience_cache = json.load(fp)
+    if use_buffer:
+        cache_path = "caches/curriculum_babyai.json"
+        with open(cache_path, 'r') as fp:
+            experience_cache = json.load(fp)
 
     agent = ContextAgentLLM(model_name='gemma3:4b', context_size=128000, temperature=0.3, max_tokens=15)
-    max_steps = 10
     env_id = "BabyAI-MixedTrainLocal-v0"
     possible_actions = ['turn left', 'turn right', 'go forward', 'pick up', 'drop', 'toggle']
-    # possible task choices are: ['goto', 'pickup', 'open', 'putnext', 'pick up seq go to']
-    env_params = {'forced_level':'goto', 'room_size':5, 'num_dists':2}
-    n_eps = 10
-
+    
     rules = "You are in a grid world containing balls and keys of different colours. There are walls that can block your movement. " + \
             "At every step, you will receive an observation about your local surroundings, and you will then select exactly one action " + \
             "from the following options: turn left, turn right, go forward. When prompted to, please select the action that best fits the situation and mission you have been assigned. " + \
@@ -39,9 +40,24 @@ if __name__ == "__main__":
             "If you see a wall one step forward, you should avoid selecting the go forward action, since this will cause nothing to happen "
             # "If your mission is to pick up an object, the object must be one step in front of you before you can use the pick up action. "
 
+    # Prepare buffer text with past experiences
+    buffer_text = ""
+    if use_buffer:
+        selected_runs = [run for run in experience_cache]
+        buffer_text += "\nHere are some past attempts for you to draw experience from:\n"
+        for i in range(len(selected_runs)):
+            buffer_text +=  f"<run {i+1}>\n" + selected_runs[i] + f"\n<run {i+1}>\n"
+        buffer_text += "\nTry to learn from these experiences to explore options to solve the problem."
+
+    print(rules + "\n")
+    if use_buffer:
+        print(f"Using {len(selected_runs)} past runs in buffer")
+        print(buffer_text)
+
+    wins = 0
     for episode in range(n_eps):
         # Create fresh environment for each episode
-        env = gym.make(env_id, **env_params)
+        env = gym.make(env_id, seed=seeds[episode], **env_params)
         obs, info = env.reset()
         counter = 0
         print(f"\n++++++++++++++++++NEW GAME {episode+1}+++++++++++++++++++\n")
@@ -51,26 +67,16 @@ if __name__ == "__main__":
         # Track how much of the observation we've already processed
         prev_obs_len = 0
 
-        # Prepare buffer text with past experiences (only for first turn)
-        selected_runs = [run for run in experience_cache]
-        buffer_text = ""
-        if len(selected_runs) > 3:
-            selected_runs = selected_runs[-3:]
-        if len(selected_runs) != 0:
-            buffer_text += "\nHere are some past attempts for you to draw experience from:\n"
-            for i in range(len(selected_runs)):
-                buffer_text +=  f"<run {i+1}>\n" + selected_runs[i] + f"\n<run {i+1}>\n"
-            buffer_text += "\nThink about where you seem to get stuck in these past runs and try to explore options to solve the problem."
-
-        print(f"Using {len(selected_runs)} past runs in buffer")
-        
         prelude = rules + buffer_text + "\nThe game begins now. "
         full_observation = prelude + "Your mission is to " + obs['mission'] + "\n" + '. '.join(info['descriptions']) + '.'
         for step in range(max_steps):
             # Extract only the NEW part of the observation
             new_observation = full_observation[prev_obs_len:]
             observation_to_send = new_observation + "\nNow select one of the following options: turn left, turn right, go forward. Remember, you are trying to find and " + obs['mission'] + ". Your selected output action is "
-            print(observation_to_send)
+            if step == 0:
+                print(observation_to_send[len(prelude):])
+            else:
+                print(observation_to_send)
 
             # Update prev_obs_len for next iteration
             prev_obs_len += len(observation_to_send)
@@ -96,6 +102,7 @@ if __name__ == "__main__":
                 print(action_response["response"])
                 print("Congratulations, you have accomplished your mission!")
                 full_observation += "\nCongratulations, you have accomplished your mission!"
+                wins += 1
                 break
             
             # if unsuccessful, append next observation and keep going
@@ -108,8 +115,5 @@ if __name__ == "__main__":
 
         full_episode_text = full_observation[len(prelude):]
         env.close()
-        experience_cache.append(full_episode_text)
 
-    # Save updated cache
-    with open(cache_path, 'w') as fp:
-        json.dump(experience_cache, fp, indent=2)
+    print(f'\nThe agent won {wins}/{n_eps} games')
