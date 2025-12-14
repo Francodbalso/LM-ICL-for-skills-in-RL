@@ -16,18 +16,24 @@ def format_action(response, possible_actions):
 
 if __name__ == "__main__":
     clear_buffer_at_start = True
-    max_steps = 8
-    n_wins_per_task = 4
-    max_games_per_task = 20
-    include_failed_runs = False
-    cache_path = "caches/curriculum_babyai.json"
+    max_steps = 6 # max steps allowed per attempt
+    n_wins_per_task = 1 # number of wins after which we skip to the next task in the curriculum
+    max_games_per_task = 10 # max number of attempts per task
+    include_failed_runs = False # include failures in the replay buffer
+    cache_path = "caches/pickup_then_goto.json"
 
     # possible task choices are: ['goto', 'pickup', 'open', 'putnext', 'pick up seq go to']
-    curriculum = [{'forced_level':'goto', 'room_size':4, 'num_dists':0},
-                  #{'forced_level':'goto', 'room_size':5, 'num_dists':2},
+    curriculum = [
+                  {'forced_level':'pickup', 'room_size':5, 'num_dists':0},
+                  {'forced_level':'goto', 'room_size':5, 'num_dists':0},
+                  #{'forced_level':'pick up seq go to', 'room_size':5, 'num_dists':0},
+                  #{'forced_level':'pick up seq go to', 'room_size':6, 'num_dists':1},
                   ]
 
-    agent = ContextAgentLLM(model_name='gemma3:4b', context_size=128000, temperature=0.3, max_tokens=15)
+    model_setting = {'model_name':'llama3.1:8b', 'context_size':7000, 'temperature':0, 'max_tokens':10}
+    #model_setting = {'model_name':'gemma3:4b', 'context_size':8000, 'temperature':0, 'max_tokens':10}
+
+    agent = ContextAgentLLM(**model_setting)
     env_id = "BabyAI-MixedTrainLocal-v0"
     possible_actions = ['turn left', 'turn right', 'go forward', 'pick up', 'drop', 'toggle']
     
@@ -40,10 +46,10 @@ if __name__ == "__main__":
 
     rules = "You are in a grid world containing balls and keys of different colours. There are walls that can block your movement. " + \
             "At every step, you will receive an observation about your local surroundings, and you will then select exactly one action " + \
-            "from the following options: turn left, turn right, go forward. When prompted to, please select the action that best fits the situation and mission you have been assigned. " + \
+            "from the following options: turn left, turn right, go forward, pick up. When prompted to, please select the action that best fits the situation and mission you have been assigned. " + \
             "If your mission is to go to an object you must simply move towards the object until you are at its position. " + \
-            "If you see a wall one step forward, you should avoid selecting the go forward action, since this will cause nothing to happen "
-            # "If your mission is to pick up an object, the object must be one step in front of you before you can use the pick up action. "
+            "If you see a wall one step forward, you should avoid selecting the go forward action, since this will cause nothing to happen " + \
+            "If your mission is to pick up an object, the object must be one step in front of you before you can use the pick up action successfully. "
 
     for task in range(len(curriculum)):
         print(f"\n+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
@@ -71,7 +77,7 @@ if __name__ == "__main__":
                 buffer_text += "\nHere are some past attempts for you to draw experience from:\n"
                 for i in range(len(selected_runs)):
                     buffer_text +=  f"<run {i+1}>\n" + selected_runs[i] + f"\n<run {i+1}>\n"
-                #buffer_text += "\nThink about where you seem to get stuck in these past runs and try to explore options to solve the problem."
+                buffer_text += "\nTry to learn from these experiences to explore options to solve the problem."
 
             print(f"Using {len(selected_runs)} past runs in buffer")
 
@@ -80,12 +86,15 @@ if __name__ == "__main__":
             for step in range(max_steps):
                 # Extract only the NEW part of the observation
                 new_observation = full_observation[prev_obs_len:]
-                observation_to_send = new_observation + "\nNow select one of the following options: turn left, turn right, go forward. Remember, you are trying to find and " + obs['mission'] + ". Your selected output action is "
-                print(observation_to_send)
+                observation_to_send = new_observation + "\nNow select one of the following options: turn left, turn right, go forward, pick up. Remember, you are trying to find and " + obs['mission'] + ". Please respond with only the action. Your selected output action is "
+                if step == 0:
+                    print(observation_to_send[len(prelude):])
+                else:
+                    print(observation_to_send)
 
                 # Update prev_obs_len for next iteration
                 prev_obs_len += len(observation_to_send)
-                full_observation += "\nNow select one of the following options: turn left, turn right, go forward. Remember, you are trying to find and " + obs['mission'] + ". Your selected output action is "
+                full_observation += "\nNow select one of the following options: turn left, turn right, go forward, pick up. Remember, you are trying to find and " + obs['mission'] + ". Please respond with only the action. Your selected output action is "
 
                 # Get action from agent
                 action_response = agent.get_action(observation_to_send, current_context)
@@ -104,7 +113,7 @@ if __name__ == "__main__":
                 
                 # check for success
                 if done:
-                    print(action_response["response"])
+                    print(formatted_action)
                     print("Congratulations, you have accomplished your mission!")
                     full_observation += "\nCongratulations, you have accomplished your mission!"
                     wins += 1

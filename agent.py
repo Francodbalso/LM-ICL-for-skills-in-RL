@@ -24,8 +24,12 @@ class ContextAgentLLM:
                         'keep_alive': -1
                         } 
     
-    def get_action(self, prompt, context):
+    def get_action(self, prompt, context, num_predict=None):
+        options_to_pass = self.options.copy()
+        if num_predict is not None:
+            options_to_pass['num_predict'] = num_predict
+
         return ollama.generate(model=self.model_name,
                         prompt=prompt,
-                        options=self.options,
-                        context = context)
+                        options=options_to_pass,
+                        context=context)
